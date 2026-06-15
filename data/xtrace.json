@@ -1,0 +1,50 @@
+{
+  "acme": [
+    {
+      "id": "b3",
+      "text": "Open action item: Security audit dossier must be delivered to Sarah Chen before final sign-off.",
+      "category": "commitments",
+      "updatedAt": "2026-05-12T14:30:00Z"
+    },
+    {
+      "id": "b4",
+      "text": "Uploaded contract specifies Net-30 payment terms and Clause 4.2 auto-renewal (requires 30-day notice).",
+      "category": "contract_note",
+      "updatedAt": "2026-05-12T14:30:00Z"
+    },
+    {
+      "id": "b_new_1780685320340_1",
+      "text": "Mark Liu (Account Director) is the primary decision maker; Sarah Chen is no longer involved.",
+      "category": "contacts",
+      "updatedAt": "2026-06-05T18:48:40.340Z"
+    },
+    {
+      "id": "b_new_1780685320340_2",
+      "text": "Timeline pushed to Q3. Budget cut to $144K ARR.",
+      "category": "deal_terms",
+      "updatedAt": "2026-06-05T18:48:40.340Z"
+    }
+  ],
+  "techcorp": [
+    {
+      "id": "b5",
+      "text": "James Wright (VP Sales) is coordinating procurement and internal sign-offs.",
+      "category": "contacts",
+      "updatedAt": "2026-05-28T16:00:00Z"
+    },
+    {
+      "id": "b6",
+      "text": "Proposal sent for $250K ARR, targeting a mid-Q3 start.",
+      "category": "deal_terms",
+      "updatedAt": "2026-05-28T16:00:00Z"
+    }
+  ],
+  "novapay": [
+    {
+      "id": "b7",
+      "text": "Elena Rostova (Product Lead) is the main champion; exploring initial integration scope.",
+      "category": "contacts",
+      "updatedAt": "2026-05-01T10:00:00Z"
+    }
+  ]
+}

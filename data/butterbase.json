@@ -1,0 +1,91 @@
+{
+  "accounts": [
+    {
+      "id": "acme",
+      "name": "Acme Corp",
+      "arr": 144000,
+      "stage": "Pilot Phase (Q3)",
+      "owner": "Alice Miller"
+    },
+    {
+      "id": "techcorp",
+      "name": "TechCorp",
+      "arr": 250000,
+      "stage": "Proposal",
+      "owner": "Alice Miller"
+    },
+    {
+      "id": "novapay",
+      "name": "NovaPay",
+      "arr": 95000,
+      "stage": "Discovery",
+      "owner": "Bob Smith"
+    }
+  ],
+  "contacts": [
+    {
+      "id": "c1",
+      "accountId": "acme",
+      "name": "Sarah Chen",
+      "role": "CTO",
+      "type": "Out"
+    },
+    {
+      "id": "c2",
+      "accountId": "acme",
+      "name": "Mark Liu",
+      "role": "Account Director",
+      "type": "Decision Maker"
+    },
+    {
+      "id": "c3",
+      "accountId": "techcorp",
+      "name": "James Wright",
+      "role": "VP Sales",
+      "type": "Decision Maker"
+    },
+    {
+      "id": "c4",
+      "accountId": "novapay",
+      "name": "Elena Rostova",
+      "role": "Product Lead",
+      "type": "Champion"
+    }
+  ],
+  "meetings": [
+    {
+      "id": "m_new_1780685320842",
+      "accountId": "acme",
+      "date": "2026-06-05",
+      "summary": "Meeting done. Acme pushed everything to Q3. Budget got cut by 20%. Sarah is now out, Mark is the new decision maker."
+    },
+    {
+      "id": "m1",
+      "accountId": "acme",
+      "date": "2026-05-12",
+      "summary": "Agreed on Q2 pilot. Sarah Chen (CTO) requested security audit before sign-off. Action item on our side still open to send the security dossier."
+    },
+    {
+      "id": "m2",
+      "accountId": "acme",
+      "date": "2026-04-20",
+      "summary": "Initial demo completed. High interest in pilot. Sarah requested details on Net-30 payment terms and pricing structure."
+    },
+    {
+      "id": "m3",
+      "accountId": "techcorp",
+      "date": "2026-05-28",
+      "summary": "Sent formal proposal for $250K. James Wright is coordinating internal sign-offs. Targeting mid-Q3 start."
+    }
+  ],
+  "files": [
+    {
+      "id": "f1",
+      "accountId": "acme",
+      "filename": "acme_pilot_contract_v2.pdf",
+      "size": "1.2 MB",
+      "uploadedAt": "2026-05-01",
+      "content": "ACME CORP PILOT AGREEMENT\n\n1. SCOPE: Pilot deployment for 500 seats.\n2. PAYMENT: Terms are Net-30 from invoice date.\n3. AUTO-RENEWAL (Clause 4.2): This agreement automatically renews for successive 12-month terms unless either party provides written notice of non-renewal at least 30 days prior to the expiration of the current term.\n4. SERVICE LEVEL AGREEMENT: 99.9% uptime target."
+    }
+  ]
+}
