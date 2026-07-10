@@ -1,0 +1,90 @@
+{
+  "description": "Loop Brief Pipeline — Fetches account + memory data from wrapper API, compiles a structured brief, and polishes it with Groq LLM.",
+  "version": 1,
+  "source": "source",
+  "components": [
+    {
+      "id": "source",
+      "provider": "webhook",
+      "name": "Webhook Input",
+      "description": "Receives JSON payload with account_name from the Express server via the TypeScript SDK.",
+      "config": {}
+    },
+    {
+      "id": "fetch_account",
+      "provider": "tool_http_request",
+      "name": "Fetch Account Data",
+      "description": "GET /account/{name} from the Butterbase wrapper API to retrieve contacts, meetings, facts.",
+      "config": {
+        "method": "GET",
+        "url": "${WRAPPER_BASE_URL}/account/${account_name}",
+        "headers": {
+          "ngrok-skip-browser-warning": "1",
+          "Content-Type": "application/json"
+        },
+        "responseType": "json"
+      },
+      "input": [
+        { "lane": "text", "from": "source" }
+      ]
+    },
+    {
+      "id": "fetch_memory",
+      "provider": "tool_http_request",
+      "name": "Fetch Memory Data",
+      "description": "GET /memory/{name} from the XTrace wrapper API to retrieve team memories.",
+      "config": {
+        "method": "GET",
+        "url": "${WRAPPER_BASE_URL}/memory/${account_name}",
+        "headers": {
+          "ngrok-skip-browser-warning": "1",
+          "Content-Type": "application/json"
+        },
+        "responseType": "json"
+      },
+      "input": [
+        { "lane": "text", "from": "source" }
+      ]
+    },
+    {
+      "id": "brief_prompt",
+      "provider": "prompt",
+      "name": "Brief Synthesis Prompt",
+      "description": "Merges account data, memory data, and system instructions into a comprehensive brief prompt for the LLM.",
+      "config": {
+        "template": "You are a senior sales-ops writer.\n\nRewrite the given pre-meeting brief into a richer, more useful Slack message. Target length is roughly 150% of the input (about 50% more content than a minimal brief).\n\nRequirements:\n- Preserve every fact, number, name, date, and stage exactly. Never invent details.\n- Output 9-13 bullet points organized under clear bold section headers (e.g. **Key Contacts**, **Last Meeting**, **Recent Activity**, **Deal Status**, **Risks & Watchouts**, **Recommended Next Steps**).\n- Everything above the Summary MUST be bullets, not prose. One short sentence per bullet. Never combine multiple bullets into a paragraph.\n- Add a \"Risks & Watchouts\" section that names concrete risks implied by the facts (stage slip, lost champion, budget cut, missing decision maker). Do not invent unstated risks.\n- Add a \"Recommended Next Steps\" section with 2-3 concrete suggestions grounded in the supplied facts.\n- ONLY the final **Summary** section is prose: a single 5-6 line paragraph that pulls together account state, the most important risks, and the meeting posture the rep should walk in with. Preserve facts exactly; no invention.\n- Keep the tone tight and professional. No filler, no hedging, no apologies, no marketing language.\n\n--- ACCOUNT DATA ---\n{{account_data}}\n\n--- TEAM MEMORIES ---\n{{memory_data}}\n\nGenerate the pre-meeting brief now."
+      },
+      "input": [
+        { "lane": "account_data", "from": "fetch_account" },
+        { "lane": "memory_data", "from": "fetch_memory" }
+      ]
+    },
+    {
+      "id": "llm_polish",
+      "provider": "llm_openai_api",
+      "name": "Groq LLM Polish",
+      "description": "Calls Groq (LLaMA 3.3 70B) via OpenAI-compatible API to synthesize and polish the brief.",
+      "config": {
+        "baseUrl": "https://api.groq.com/openai/v1",
+        "apiKey": "${GROQ_API_KEY}",
+        "model": "${GROQ_MODEL}",
+        "temperature": 0.3
+      },
+      "input": [
+        { "lane": "text", "from": "brief_prompt" }
+      ]
+    },
+    {
+      "id": "output",
+      "provider": "response",
+      "name": "Return Brief",
+      "description": "Returns the polished brief text back to the calling SDK client.",
+      "config": {
+        "laneName": "text"
+      },
+      "input": [
+        { "lane": "text", "from": "llm_polish" }
+      ]
+    }
+  ]
+}

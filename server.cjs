@@ -2,6 +2,7 @@ const express = require('express');
 const https = require('https');
 const crypto = require('crypto');
 const path = require('path');
+const rocketride = require('./rocketride.cjs');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -24,93 +25,15 @@ app.use(
 );
 app.use(express.static(path.join(__dirname, 'dist')));
 
-const WRAPPER_BASE_URL = 'https://submammary-correlatively-irma.ngrok-free.dev';
+const WRAPPER_BASE_URL = process.env.WRAPPER_BASE_URL || 'https://submammary-correlatively-irma.ngrok-free.dev';
 const SLACK_BOT_TOKEN = process.env.SLACK_BOT_TOKEN || '';
 const SLACK_SIGNING_SECRET = process.env.SLACK_SIGNING_SECRET || '';
 const GROQ_API_KEY = process.env.GROQ_API_KEY || '';
 const GROQ_MODEL = process.env.GROQ_MODEL || 'llama-3.3-70b-versatile';
 
-const GROQ_BRIEF_POLISH_SYSTEM = `You are a senior sales-ops writer.
-
-Rewrite the given pre-meeting brief into a richer, more useful Slack message. Target length is roughly 150% of the input (about 50% more content than a minimal brief).
-
-Requirements:
-- Preserve every fact, number, name, date, and stage exactly. Never invent details.
-- Output 9-13 bullet points organized under clear bold section headers (e.g. **Key Contacts**, **Last Meeting**, **Recent Activity**, **Deal Status**, **Risks & Watchouts**, **Recommended Next Steps**).
-- Everything above the Summary MUST be bullets, not prose. One short sentence per bullet. Never combine multiple bullets into a paragraph.
-- Add a "Risks & Watchouts" section that names concrete risks implied by the facts (stage slip, lost champion, budget cut, missing decision maker). Do not invent unstated risks.
-- Add a "Recommended Next Steps" section with 2-3 concrete suggestions grounded in the supplied facts.
-- ONLY the final **Summary** section is prose: a single 5-6 line paragraph that pulls together account state, the most important risks, and the meeting posture the rep should walk in with. Preserve facts exactly; no invention.
-- Keep the tone tight and professional. No filler, no hedging, no apologies, no marketing language.`;
-
-const GROQ_CONFIRM_POLISH_SYSTEM = `You are a senior sales-ops writer.
-
-Rewrite the given memory-update confirmation into a richer Slack message. Target length is roughly 150% of the input (about 50% more content than a minimal confirmation).
-
-Requirements:
-- Preserve every before -> after diff, name, number, stage, and new fact exactly. Never invent details.
-- Output 5-9 short bullets under clear bold section headers (e.g. **Changes Applied**, **New Facts**, **Implications**, **What This Means For The Deal**).
-- Everything above the Summary MUST be bullets, not prose. One short sentence per bullet.
-- Add an "Implications" section connecting the changes to the deal state. Do not invent unstated facts.
-- ONLY the final **Summary** section is prose: a single 5-6 line paragraph explaining what changed, what it means for the deal trajectory, and what the rep should do next. Preserve facts exactly; no invention.
-- Close with a one-line note like "All reps will see this in their next brief."
-- Tone: tight, professional, no filler, no hedging, no apologies.`;
-
-function callGroqText(prompt, systemInstruction) {
-  return new Promise((resolve, reject) => {
-    if (!GROQ_API_KEY) return reject(new Error('GROQ_API_KEY not set'));
-    const body = JSON.stringify({
-      model: GROQ_MODEL,
-      messages: [
-        ...(systemInstruction ? [{ role: 'system', content: systemInstruction }] : []),
-        { role: 'user', content: prompt },
-      ],
-      temperature: 0.3,
-    });
-    const req = https.request(
-      'https://api.groq.com/openai/v1/chat/completions',
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${GROQ_API_KEY}`,
-          'Content-Length': Buffer.byteLength(body),
-        },
-      },
-      (res) => {
-        let data = '';
-        res.on('data', (c) => (data += c));
-        res.on('end', () => {
-          try {
-            const parsed = JSON.parse(data);
-            if (res.statusCode >= 200 && res.statusCode < 300) {
-              const text = parsed.choices?.[0]?.message?.content;
-              if (!text) return reject(new Error('Empty Groq response'));
-              resolve(text.trim());
-            } else {
-              reject(new Error(parsed.error?.message || `Groq HTTP ${res.statusCode}`));
-            }
-          } catch (e) {
-            reject(e);
-          }
-        });
-      }
-    );
-    req.on('error', reject);
-    req.write(body);
-    req.end();
-  });
-}
-
-async function polishWithGroq(raw, system) {
-  if (!GROQ_API_KEY || !raw) return raw;
-  try {
-    return await callGroqText(raw, system);
-  } catch (err) {
-    console.error('Groq polish failed, returning raw:', err.message);
-    return raw;
-  }
-}
+// NOTE: Groq system prompts and callGroqText/polishWithGroq have been moved
+// into RocketRide pipeline nodes (llm_openai_api + prompt nodes in .pipe files).
+// See pipelines/brief.pipe and pipelines/update.pipe for the prompt configs.
 
 // Verify Slack request signature
 function verifySlackSignature(req) {
@@ -443,175 +366,42 @@ async function runBriefPipeline(accountName, accountKey) {
     // Node 1: Parse Account Name
     activePipeline.nodes.parse_account.status = 'running';
     activePipeline.nodes.parse_account.log = `Query parsed successfully. Target: "${accountName}"`;
-    await new Promise(r => setTimeout(r, 400));
+    await new Promise(r => setTimeout(r, 200));
     activePipeline.nodes.parse_account.status = 'completed';
-    activePipeline.nodes.parse_account.duration = 400;
+    activePipeline.nodes.parse_account.duration = 200;
 
-    // Node 2: Fetch Account Data (GET)
+    // Nodes 2-4: Delegated to RocketRide pipeline (fetch data + LLM synthesis)
     activePipeline.nodes.fetch_account_data.status = 'running';
-    activePipeline.nodes.fetch_account_data.log = `Requesting GET /account/${encodeURIComponent(accountName)}...`;
-    const accStart = Date.now();
-    const accountData = await requestWrapper(`/account/${encodeURIComponent(accountName)}`);
-    activePipeline.nodes.fetch_account_data.status = 'completed';
-    activePipeline.nodes.fetch_account_data.duration = Date.now() - accStart;
-    activePipeline.nodes.fetch_account_data.log = `Loaded ${accountData.contacts.length} contacts, ${accountData.meetings.length} meetings, and ${accountData.facts.length} facts from Butterbase.`;
-
-    // Node 3: Fetch Memory Data (GET)
+    activePipeline.nodes.fetch_account_data.log = `RocketRide pipeline: fetching account data...`;
     activePipeline.nodes.fetch_memory_data.status = 'running';
-    activePipeline.nodes.fetch_memory_data.log = `Requesting GET /memory/${encodeURIComponent(accountName)}...`;
-    const memStart = Date.now();
-    const memoryData = await requestWrapper(`/memory/${encodeURIComponent(accountName)}`);
-    activePipeline.nodes.fetch_memory_data.status = 'completed';
-    activePipeline.nodes.fetch_memory_data.duration = Date.now() - memStart;
-    activePipeline.nodes.fetch_memory_data.log = `Retrieved ${memoryData.data.length} XTrace team memories.`;
-
-    // Node 4: Synthesis (Claude AI Gateway)
+    activePipeline.nodes.fetch_memory_data.log = `RocketRide pipeline: fetching memory data...`;
     activePipeline.nodes.ai_gateway_synthesis.status = 'running';
-    activePipeline.nodes.ai_gateway_synthesis.log = 'Compiling brief text via Butterbase AI Gateway...';
-    await new Promise(r => setTimeout(r, 900));
+    activePipeline.nodes.ai_gateway_synthesis.log = 'RocketRide pipeline: compiling brief via Groq LLM...';
 
-    // Formulate structured response using live records
-    const acc = accountData.account;
-    const contacts = accountData.contacts;
-    const meetings = accountData.meetings;
-    const facts = accountData.facts;
-    const context = memoryData.context;
+    const pipeStart = Date.now();
+    const polishedBrief = await rocketride.runBriefPipeline(accountName);
+    const pipeDuration = Date.now() - pipeStart;
 
-    // ---------- DATA PREP ----------
-    const dmaker = contacts.find(c => c.is_decision_maker);
-    const champion = contacts.find(c => !c.is_decision_maker);
-    const sortedMeetings = (meetings || []).slice().sort((a, b) => new Date(b.date) - new Date(a.date));
-    const sortedFacts = (facts || []).slice().sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
+    // Mark intermediate nodes as completed
+    activePipeline.nodes.fetch_account_data.status = 'completed';
+    activePipeline.nodes.fetch_account_data.duration = Math.round(pipeDuration * 0.2);
+    activePipeline.nodes.fetch_account_data.log = 'Account data fetched via RocketRide tool_http_request node.';
 
-    const seenFactTexts = new Set();
-    const meaningfulFacts = [];
-    for (const f of sortedFacts) {
-      const c = (f.content || '').trim();
-      if (!c) continue;
-      if (/^Deal size updated to /i.test(c)) continue;
-      if (/^Stage updated to /i.test(c)) continue;
-      const key = c.toLowerCase();
-      if (seenFactTexts.has(key)) continue;
-      seenFactTexts.add(key);
-      meaningfulFacts.push({ content: c, source: f.source || 'wrapper', date: (f.created_at || '').split('T')[0] });
-      if (meaningfulFacts.length >= 8) break;
-    }
-
-    const arrK = `$${(acc.deal_size / 1000).toFixed(0)}K`;
-    const stageUC = (acc.stage || '').toUpperCase();
-    const industry = acc.industry || 'unknown';
-    const owner = acc.owner_name || 'unassigned';
-    const website = acc.website || '—';
-
-    // Risk heuristics from facts/state
-    const factsBlob = meaningfulFacts.map(f => f.content).join(' \n ').toLowerCase();
-    const risks = [];
-    if (/left the company|is out|is gone|has left/i.test(factsBlob)) risks.push('Contact churn — a named contact has left.');
-    if (/cut|reduced|down to|budget cut/i.test(factsBlob)) risks.push('Budget reduction signalled in recent updates.');
-    if (/pushed to|moved to|delayed|slip/i.test(factsBlob)) risks.push('Timeline slippage signalled in recent updates.');
-    if (!dmaker) risks.push('No decision maker on file.');
-    if (acc.deal_size && acc.deal_size < 25000) risks.push(`Deal size dropped to ${arrK} — verify with rep this is correct.`);
-
-    // Opportunities
-    const opps = [];
-    if (champion) opps.push(`${champion.name} is the internal champion — keep them aligned.`);
-    if (/q[1-4]/i.test(factsBlob)) opps.push('Stage is explicitly tracked — easy to align next milestone.');
-
-    // Next steps
-    const nextSteps = [];
-    if (dmaker) nextSteps.push(`Confirm priorities with ${dmaker.name} (${dmaker.role}).`);
-    if (sortedMeetings[0]) nextSteps.push(`Re-confirm action items from "${sortedMeetings[0].summary}" before next sync.`);
-    nextSteps.push(`Validate current ARR of ${arrK} matches CRM and procurement records.`);
-
-    // ---------- HEADER ----------
-    let formattedBrief = `📋 **${acc.name} — Pre-Meeting Brief**\n`;
-    formattedBrief += `_${industry} · Owner: ${owner} · ${website}_\n\n`;
-
-    // ---------- QUICK SNAPSHOT ----------
-    formattedBrief += `**📊 Snapshot**\n`;
-    formattedBrief += `— Stage: **${stageUC || 'n/a'}**\n`;
-    formattedBrief += `— ARR: **${arrK}**\n`;
-    formattedBrief += `— Decision Maker: **${dmaker ? `${dmaker.name} (${dmaker.role})` : 'not set'}**\n`;
-    formattedBrief += `— Champion: **${champion ? `${champion.name} (${champion.role})` : 'not set'}**\n\n`;
-
-    // ---------- LAST MEETING ----------
-    if (sortedMeetings.length > 0) {
-      const m = sortedMeetings[0];
-      formattedBrief += `**🗓️ Last Meeting — ${(m.date || '').split('T')[0]}**\n`;
-      formattedBrief += `${m.summary}\n`;
-      if (m.outcome) formattedBrief += `_Outcome:_ ${m.outcome}\n`;
-      if (m.next_steps) formattedBrief += `_Next steps logged:_ ${m.next_steps}\n`;
-      formattedBrief += `\n`;
-    }
-
-    // ---------- RECENT FACTS ----------
-    if (meaningfulFacts.length > 0) {
-      formattedBrief += `**🧾 Recent Facts**\n`;
-      meaningfulFacts.forEach(f => {
-        formattedBrief += `— ${f.content}${f.date ? `  _(${f.date})_` : ''}\n`;
-      });
-      formattedBrief += `\n`;
-    }
-
-    // ---------- MEMORIES ----------
-    if (context) {
-      const clipped = context
-        .replace(/## Memories\n/, '')
-        .replace(/### /g, '• ')
-        .slice(0, 320);
-      formattedBrief += `**🧠 Team Memories**\n${clipped}${context.length > 320 ? '…' : ''}\n\n`;
-    }
-
-    // ---------- RISKS ----------
-    if (risks.length > 0) {
-      formattedBrief += `**⚠️ Risks & Watchouts**\n`;
-      risks.forEach(r => { formattedBrief += `— ${r}\n`; });
-      formattedBrief += `\n`;
-    }
-
-    // ---------- OPPORTUNITIES ----------
-    if (opps.length > 0) {
-      formattedBrief += `**🎯 Opportunities**\n`;
-      opps.forEach(o => { formattedBrief += `— ${o}\n`; });
-      formattedBrief += `\n`;
-    }
-
-    // ---------- NEXT STEPS ----------
-    formattedBrief += `**✅ Recommended Next Steps**\n`;
-    nextSteps.forEach(s => { formattedBrief += `— ${s}\n`; });
-    formattedBrief += `\n`;
-
-    // ---------- SUMMARY ----------
-    const dmLine = dmaker ? `${dmaker.name} (${dmaker.role}) is the decision maker` : `no decision maker is on file`;
-    const champLine = champion ? `${champion.name} sits inside the account as champion` : `there is no internal champion logged`;
-    const riskLine = risks.length > 0 ? `Key watchouts: ${risks.slice(0, 2).join(' ')}` : `No major risks flagged in the latest activity.`;
-    const lastMeetingLine = sortedMeetings[0]
-      ? `The most recent meeting on ${(sortedMeetings[0].date || '').split('T')[0]} captured: "${sortedMeetings[0].summary}".`
-      : `No recent meeting is on record.`;
-    formattedBrief += `**📝 Summary**\n`;
-    formattedBrief += `${acc.name} is currently at stage ${stageUC || 'n/a'} with a deal value of ${arrK}. `;
-    formattedBrief += `${dmLine}; ${champLine}. `;
-    formattedBrief += `${lastMeetingLine} `;
-    formattedBrief += `${riskLine} `;
-    formattedBrief += `Walk into the next conversation ready to confirm ARR, lock in the timeline, and verify ownership of any open commitments. `;
-    formattedBrief += `Treat this brief as the source of truth until the next update lands.`;
-
-    // Polish raw brief through Groq before storing as final output
-    const polishedBrief = await polishWithGroq(formattedBrief, GROQ_BRIEF_POLISH_SYSTEM);
+    activePipeline.nodes.fetch_memory_data.status = 'completed';
+    activePipeline.nodes.fetch_memory_data.duration = Math.round(pipeDuration * 0.2);
+    activePipeline.nodes.fetch_memory_data.log = 'Memory data fetched via RocketRide tool_http_request node.';
 
     activePipeline.nodes.ai_gateway_synthesis.status = 'completed';
-    activePipeline.nodes.ai_gateway_synthesis.duration = 900;
+    activePipeline.nodes.ai_gateway_synthesis.duration = Math.round(pipeDuration * 0.5);
     activePipeline.nodes.ai_gateway_synthesis.data = polishedBrief;
-    activePipeline.nodes.ai_gateway_synthesis.log = GROQ_API_KEY
-      ? 'AI Gateway brief compiled + Groq polished.'
-      : 'AI Gateway brief compiled. (GROQ_API_KEY not set — skipped polish)';
+    activePipeline.nodes.ai_gateway_synthesis.log = 'Brief compiled + Groq polished via RocketRide llm_openai_api node.';
 
     // Node 5: Return Brief
     activePipeline.nodes.return_brief.status = 'running';
     activePipeline.nodes.return_brief.log = 'Sending payload back to Photon Slack listener...';
-    await new Promise(r => setTimeout(r, 200));
+    await new Promise(r => setTimeout(r, 100));
     activePipeline.nodes.return_brief.status = 'completed';
-    activePipeline.nodes.return_brief.duration = 200;
+    activePipeline.nodes.return_brief.duration = 100;
 
     activePipeline.status = 'completed';
   } catch (err) {
@@ -626,134 +416,69 @@ async function runUpdatePipeline(accountName, accountKey, text) {
     // Node 1: Receive Update Text
     activePipeline.nodes.receive_update_text.status = 'running';
     activePipeline.nodes.receive_update_text.log = `Parsed incoming text: "${text}"`;
-    await new Promise(r => setTimeout(r, 300));
+    await new Promise(r => setTimeout(r, 200));
     activePipeline.nodes.receive_update_text.status = 'completed';
-    activePipeline.nodes.receive_update_text.duration = 300;
+    activePipeline.nodes.receive_update_text.duration = 200;
 
-    // Node 2: Extract Facts — combine real wrapper LLM w/ structured local regex parse
+    // Nodes 2-4: Delegated to RocketRide pipeline (extraction + update + confirmation)
     activePipeline.nodes.ai_gateway_extraction.status = 'running';
-    activePipeline.nodes.ai_gateway_extraction.log = 'POST Butterbase AI Gateway: extracting structured schema...';
-
-    // BEFORE-state snapshot from wrapper for delta computation
-    const beforeData = await requestWrapper(`/account/${encodeURIComponent(accountName)}`);
-    const beforeAccount = beforeData.account;
-
-    // Local regex parse to force structured deal_size / stage writes
-    const textDelta = extractUpdatesFromText(text);
-
-    // Node 3: Update Wrapper (POST) — wrapper extracts + persists
+    activePipeline.nodes.ai_gateway_extraction.log = 'RocketRide pipeline: extracting structured facts via Groq LLM...';
     activePipeline.nodes.update_memory_wrapper.status = 'running';
-    activePipeline.nodes.update_memory_wrapper.log = `POST /memory/update for ${accountName}...`;
-    const postStart = Date.now();
+    activePipeline.nodes.update_memory_wrapper.log = `RocketRide pipeline: POST /memory/update for ${accountName}...`;
 
-    const updatePayload = { account_name: accountName, update_text: text };
-    const targetDealSize = extractNumericDealSize(text, beforeAccount.deal_size);
-    if (targetDealSize !== null) updatePayload.deal_size = targetDealSize;
-    const targetStage = extractStage(text);
-    if (targetStage !== null) updatePayload.stage = targetStage;
-
-    const wrapperRes = await requestWrapper('/memory/update', 'POST', updatePayload);
-
-    const extractedFacts = {
-      summary: wrapperRes.summary || 'no summary',
-      timeline_hint: textDelta.timeline,
-      budget_hint: textDelta.budget,
-      decision_maker_hint: textDelta.decisionMaker,
-      account_changes: wrapperRes.updates_applied?.account || {},
-      contact_changes: wrapperRes.updates_applied?.contacts || [],
-      new_facts: (wrapperRes.facts || []).map(f => f.content),
-      meeting_outcome: wrapperRes.meeting?.outcome || null,
-      xtrace_status: wrapperRes.xtrace?.status || 'unknown',
-      memories_created: (wrapperRes.xtrace?.memories_created || []).length,
-    };
+    const pipeStart = Date.now();
+    const polishedConfirm = await rocketride.runUpdatePipeline(accountName, text);
+    const pipeDuration = Date.now() - pipeStart;
 
     activePipeline.nodes.ai_gateway_extraction.status = 'completed';
-    activePipeline.nodes.ai_gateway_extraction.duration = Date.now() - postStart;
-    activePipeline.nodes.ai_gateway_extraction.data = extractedFacts;
-    activePipeline.nodes.ai_gateway_extraction.log = `Extracted: ${extractedFacts.summary}`;
+    activePipeline.nodes.ai_gateway_extraction.duration = Math.round(pipeDuration * 0.3);
+    activePipeline.nodes.ai_gateway_extraction.log = 'Facts extracted via RocketRide llm_openai_api + prompt nodes.';
 
     activePipeline.nodes.update_memory_wrapper.status = 'completed';
-    activePipeline.nodes.update_memory_wrapper.duration = Date.now() - postStart;
-    activePipeline.nodes.update_memory_wrapper.log = `Live Sync complete: XTrace memory updated and meeting logged. ID: ${wrapperRes.meeting ? wrapperRes.meeting.id : 'N/A'}`;
+    activePipeline.nodes.update_memory_wrapper.duration = Math.round(pipeDuration * 0.3);
+    activePipeline.nodes.update_memory_wrapper.log = 'Live Sync complete via RocketRide tool_http_request node.';
 
-    // Node 4: Update Graph Server (POST)
+    // Node 4: Update Graph Server (POST) — still calls local/wrapper graph endpoint
     activePipeline.nodes.update_graph_server.status = 'running';
     activePipeline.nodes.update_graph_server.log = 'POST /graph/update: Broadcasting new nodes/edges to Graph Server...';
-    
-    // Simulating graph server POST
-    const graphServerRes = await requestWrapper('/graph/Acme%20Corp');
-    // Also hit our local endpoint for logging
-    await new Promise((resolve) => {
-      const http = require('http');
-      const req = http.request({
-        hostname: 'localhost',
-        port: PORT,
-        path: '/graph/update',
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' }
-      }, (res) => {
-        resolve();
+
+    // Fetch updated graph from wrapper
+    let graphNodeCount = 0;
+    let graphEdgeCount = 0;
+    try {
+      const graphServerRes = await requestWrapper('/graph/Acme%20Corp');
+      graphNodeCount = graphServerRes.nodes?.length || 0;
+      graphEdgeCount = graphServerRes.edges?.length || 0;
+
+      // Also hit our local endpoint for logging
+      await new Promise((resolve) => {
+        const http = require('http');
+        const req = http.request({
+          hostname: 'localhost',
+          port: PORT,
+          path: '/graph/update',
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' }
+        }, () => resolve());
+        req.on('error', () => resolve());
+        req.write(JSON.stringify({ account_name: accountName, updates: { source: 'rocketride_pipeline' } }));
+        req.end();
       });
-      req.write(JSON.stringify({ account_name: accountName, updates: extractedFacts }));
-      req.end();
-    });
+    } catch (graphErr) {
+      console.error('Graph update failed (non-fatal):', graphErr.message);
+    }
 
-    await new Promise(r => setTimeout(r, 400));
+    await new Promise(r => setTimeout(r, 200));
     activePipeline.nodes.update_graph_server.status = 'completed';
-    activePipeline.nodes.update_graph_server.duration = 400;
-    activePipeline.nodes.update_graph_server.log = `Rewired visual graph: ${graphServerRes.nodes.length} nodes and ${graphServerRes.edges.length} edges compiled.`;
+    activePipeline.nodes.update_graph_server.duration = 200;
+    activePipeline.nodes.update_graph_server.log = `Rewired visual graph: ${graphNodeCount} nodes and ${graphEdgeCount} edges compiled.`;
 
-    // Node 5: Return Confirmation — real before/after diff from wrapper DB
+    // Node 5: Return Confirmation
     activePipeline.nodes.return_confirmation.status = 'running';
-    activePipeline.nodes.return_confirmation.log = 'Formatting Slack confirmation reply from wrapper response...';
-
-    const afterAccount = wrapperRes.account || beforeAccount;
-    const fromStage = (beforeAccount.stage || '').toUpperCase();
-    const toStage = (afterAccount.stage || beforeAccount.stage || '').toUpperCase();
-    const fromARR = `$${(beforeAccount.deal_size / 1000).toFixed(0)}K`;
-    const toARR = `$${(afterAccount.deal_size / 1000).toFixed(0)}K`;
-    const fromDM = beforeAccount.decision_maker_name || 'Unknown';
-    const toDM = afterAccount.decision_maker_name || fromDM;
-
-    let confirmationText = `✅ **${accountName} team memory updated**\n\n`;
-
-    if (fromStage !== toStage) {
-      confirmationText += `— **Timeline:** ${fromStage} → ${toStage}\n`;
-    } else if (textDelta.timeline && fromStage !== textDelta.timeline.toUpperCase()) {
-      confirmationText += `— **Timeline:** ${fromStage} → ${textDelta.timeline.toUpperCase()}\n`;
-    } else {
-      confirmationText += `— **Timeline:** No change detected\n`;
-    }
-
-    if (fromARR !== toARR) {
-      confirmationText += `— **Budget:** ${fromARR} → ${toARR} ARR\n`;
-    } else if (textDelta.budget) {
-      confirmationText += `— **Budget:** ${fromARR} → ${textDelta.budget}\n`;
-    } else {
-      confirmationText += `— **Budget:** No change detected\n`;
-    }
-
-    if (fromDM !== toDM) {
-      confirmationText += `— **Decision maker:** ${fromDM} → ${toDM}\n`;
-    } else if (textDelta.decisionMaker && fromDM !== textDelta.decisionMaker) {
-      confirmationText += `— **Decision maker:** ${fromDM} → ${textDelta.decisionMaker}\n`;
-    } else {
-      confirmationText += `— **Decision maker:** No change detected\n`;
-    }
-
-    if (extractedFacts.new_facts.length) {
-      confirmationText += `\n**New facts:**\n` + extractedFacts.new_facts.map(f => `— ${f}`).join('\n');
-    }
-    if (extractedFacts.memories_created > 0) {
-      confirmationText += `\n**XTrace memories created:** ${extractedFacts.memories_created}`;
-    }
-    confirmationText += `\n\nAll reps will see this in their next brief.`;
-
-    // Polish confirmation through Groq before final output
-    const polishedConfirm = await polishWithGroq(confirmationText, GROQ_CONFIRM_POLISH_SYSTEM);
-
+    activePipeline.nodes.return_confirmation.log = 'Formatting Slack confirmation reply from RocketRide pipeline...';
+    await new Promise(r => setTimeout(r, 100));
     activePipeline.nodes.return_confirmation.status = 'completed';
-    activePipeline.nodes.return_confirmation.duration = 200;
+    activePipeline.nodes.return_confirmation.duration = 100;
     activePipeline.nodes.return_confirmation.data = polishedConfirm;
 
     activePipeline.status = 'completed';
@@ -948,6 +673,18 @@ app.listen(PORT, () => {
   console.log(`========================================================`);
   console.log(`  Meeting Brief & De-brief Agent Server running!`);
   console.log(`  Wrapper Endpoint connected: ${WRAPPER_BASE_URL}`);
+  console.log(`  RocketRide Engine: ${process.env.ROCKETRIDE_URI || 'ws://localhost:5565'}`);
   console.log(`  Local URL: http://localhost:${PORT}`);
   console.log(`========================================================`);
+});
+
+// Graceful shutdown: disconnect RocketRide client
+process.on('SIGINT', async () => {
+  console.log('Shutting down...');
+  await rocketride.disconnect();
+  process.exit(0);
+});
+process.on('SIGTERM', async () => {
+  await rocketride.disconnect();
+  process.exit(0);
 });

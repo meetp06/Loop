@@ -1,0 +1,120 @@
+{
+  "description": "Loop Update Pipeline — Extracts structured facts from freeform text, updates the wrapper API, and generates a polished confirmation.",
+  "version": 1,
+  "source": "source",
+  "components": [
+    {
+      "id": "source",
+      "provider": "webhook",
+      "name": "Webhook Input",
+      "description": "Receives JSON payload with account_name and update_text from the Express server.",
+      "config": {}
+    },
+    {
+      "id": "fetch_before",
+      "provider": "tool_http_request",
+      "name": "Fetch Before-State",
+      "description": "GET /account/{name} to snapshot current account state before applying updates.",
+      "config": {
+        "method": "GET",
+        "url": "${WRAPPER_BASE_URL}/account/${account_name}",
+        "headers": {
+          "ngrok-skip-browser-warning": "1",
+          "Content-Type": "application/json"
+        },
+        "responseType": "json"
+      },
+      "input": [
+        { "lane": "text", "from": "source" }
+      ]
+    },
+    {
+      "id": "extract_prompt",
+      "provider": "prompt",
+      "name": "Fact Extraction Prompt",
+      "description": "Merges the freeform update text with before-state into a structured extraction prompt.",
+      "config": {
+        "template": "You are a structured entity extractor for a sales meeting brief AI agent.\n\nGiven the update text and the current account state, extract a JSON object with these fields:\n- \"summary\": one-sentence summary of the update\n- \"deal_size\": numeric deal size if mentioned (e.g. 100000 for $100K), or null\n- \"stage\": new stage if mentioned (e.g. \"q3\", \"pilot\", \"proposal\"), or null\n- \"decision_maker\": name of new decision maker if mentioned, or null\n- \"new_facts\": array of short fact strings extracted from the update\n- \"timeline\": quarter mentioned (e.g. \"Q3\"), or null\n- \"budget\": budget description if mentioned (e.g. \"$100K ARR\"), or null\n\nRespond with valid JSON only. No markdown, no code fences.\n\n--- CURRENT ACCOUNT STATE ---\n{{before_state}}\n\n--- UPDATE TEXT ---\n{{update_text}}"
+      },
+      "input": [
+        { "lane": "before_state", "from": "fetch_before" },
+        { "lane": "update_text", "from": "source" }
+      ]
+    },
+    {
+      "id": "llm_extract",
+      "provider": "llm_openai_api",
+      "name": "Groq Fact Extraction",
+      "description": "Calls Groq to extract structured facts from freeform update text.",
+      "config": {
+        "baseUrl": "https://api.groq.com/openai/v1",
+        "apiKey": "${GROQ_API_KEY}",
+        "model": "${GROQ_MODEL}",
+        "temperature": 0.1
+      },
+      "input": [
+        { "lane": "text", "from": "extract_prompt" }
+      ]
+    },
+    {
+      "id": "update_wrapper",
+      "provider": "tool_http_request",
+      "name": "Update Wrapper API",
+      "description": "POST /memory/update to persist extracted facts to Butterbase + XTrace via the wrapper.",
+      "config": {
+        "method": "POST",
+        "url": "${WRAPPER_BASE_URL}/memory/update",
+        "headers": {
+          "ngrok-skip-browser-warning": "1",
+          "Content-Type": "application/json"
+        },
+        "responseType": "json"
+      },
+      "input": [
+        { "lane": "data", "from": "llm_extract" },
+        { "lane": "text", "from": "source" }
+      ]
+    },
+    {
+      "id": "confirm_prompt",
+      "provider": "prompt",
+      "name": "Confirmation Prompt",
+      "description": "Formats before/after diff and wrapper response into a confirmation message for polishing.",
+      "config": {
+        "template": "You are a senior sales-ops writer.\n\nRewrite the given memory-update confirmation into a richer Slack message. Target length is roughly 150% of the input (about 50% more content than a minimal confirmation).\n\nRequirements:\n- Preserve every before -> after diff, name, number, stage, and new fact exactly. Never invent details.\n- Output 5-9 short bullets under clear bold section headers (e.g. **Changes Applied**, **New Facts**, **Implications**, **What This Means For The Deal**).\n- Everything above the Summary MUST be bullets, not prose. One short sentence per bullet.\n- Add an \"Implications\" section connecting the changes to the deal state. Do not invent unstated facts.\n- ONLY the final **Summary** section is prose: a single 5-6 line paragraph explaining what changed, what it means for the deal trajectory, and what the rep should do next. Preserve facts exactly; no invention.\n- Close with a one-line note like \"All reps will see this in their next brief.\"\n- Tone: tight, professional, no filler, no hedging, no apologies.\n\n--- BEFORE STATE ---\n{{before_state}}\n\n--- EXTRACTED FACTS ---\n{{extracted_facts}}\n\n--- WRAPPER RESPONSE ---\n{{wrapper_response}}\n\nGenerate the confirmation message now."
+      },
+      "input": [
+        { "lane": "before_state", "from": "fetch_before" },
+        { "lane": "extracted_facts", "from": "llm_extract" },
+        { "lane": "wrapper_response", "from": "update_wrapper" }
+      ]
+    },
+    {
+      "id": "llm_confirm",
+      "provider": "llm_openai_api",
+      "name": "Groq Confirmation Polish",
+      "description": "Calls Groq to polish the confirmation message into a rich Slack-ready format.",
+      "config": {
+        "baseUrl": "https://api.groq.com/openai/v1",
+        "apiKey": "${GROQ_API_KEY}",
+        "model": "${GROQ_MODEL}",
+        "temperature": 0.3
+      },
+      "input": [
+        { "lane": "text", "from": "confirm_prompt" }
+      ]
+    },
+    {
+      "id": "output",
+      "provider": "response",
+      "name": "Return Confirmation",
+      "description": "Returns the polished confirmation text back to the calling SDK client.",
+      "config": {
+        "laneName": "text"
+      },
+      "input": [
+        { "lane": "text", "from": "llm_confirm" }
+      ]
+    }
+  ]
+}
