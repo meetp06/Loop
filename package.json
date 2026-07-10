@@ -1,8 +1,18 @@
 {
-  "name": "jun5",
+  "name": "loop",
   "private": true,
-  "version": "0.0.0",
+  "version": "1.0.0",
+  "description": "Loop — an AI meeting brief & de-brief agent that lives in Slack, backed by a RocketRide pipeline and a live D3 knowledge graph.",
   "type": "module",
+  "license": "MIT",
+  "author": "Meetkumar Patel",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/meetp06/Loop.git"
+  },
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "dev": "vite",
     "build": "vite build",
