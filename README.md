@@ -27,6 +27,14 @@ Every brief and update runs through a **RocketRide AI pipeline**, so the LLM syn
 
 ---
 
+## 🖼️ Preview
+
+**Live team memory graph** — every account's contacts, meetings, facts, and memories rendered as a D3 force-directed graph that rewires in real time as Loop learns.
+
+![Loop memory graph](public/loop-memory-graph.png)
+
+---
+
 ## 🏗️ Architecture
 
 ```
